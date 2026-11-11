@@ -17,7 +17,7 @@ jobs:
       - name: Locate app files
         run: |
           mkdir -p www
-          for f in index.html style.css app.js; do
+          for f in index.html style.css app.js roster.js; do
             P=$(find . -path ./node_modules -prune -o -path ./www -prune -o -name "$f" -type f -print | head -n 1)
             if [ -z "$P" ]; then
               echo "ERROR: $f not found in repo. Files present:"
@@ -46,9 +46,11 @@ jobs:
           npm init -y
           npm install @capacitor/core @capacitor/cli @capacitor/android
           npm install @capacitor/filesystem @capacitor/share
-          npm install jsqr
+          npm install jsqr pdfjs-dist@3.11.174
           npm install @capacitor/assets --save-dev
           cp node_modules/jsqr/dist/jsQR.js www/jsQR.js
+          cp node_modules/pdfjs-dist/build/pdf.min.js www/pdf.min.js
+          cp node_modules/pdfjs-dist/build/pdf.worker.min.js www/pdf.worker.min.js
           echo "{\"appId\": \"org.evc.qrattendance\", \"appName\": \"$APP_NAME\", \"webDir\": \"www\", \"backgroundColor\": \"#070b18\"}" > capacitor.config.json
           npx cap add android
 
