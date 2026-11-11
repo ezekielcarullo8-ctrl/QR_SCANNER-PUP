@@ -80,9 +80,9 @@ function renderTable(){
     Object.entries(S.roster).filter(([k])=>!seen.has(k)).sort((a,b)=>a[1].localeCompare(b[1])).forEach(([k,name])=>{
       if(q&&!(name+k).toLowerCase().includes(q))return;n++;
       html+=`<tr class="abs"><td>${n}</td><td><b>${esc(name)}</b><small>${esc(k)}</small></td><td class="t">Absent</td><td></td></tr>`});
-  }else v.rows.forEach((r,i)=>{
+  }else v.rows.map((r,i)=>({r,i})).sort((x,y)=>label(x.r.c).localeCompare(label(y.r.c))||x.r.c.localeCompare(y.r.c)).forEach(({r,i})=>{
     if(q&&!(label(r.c)+r.c).toLowerCase().includes(q))return;n++;
-    html+=`<tr><td>${i+1}</td><td><b>${esc(label(r.c))}</b><small>${esc(r.c)}</small></td><td class="t">${fmtT(r.t)}</td><td><button data-d="${i}">✕</button></td></tr>`});
+    html+=`<tr><td>${n}</td><td><b>${esc(label(r.c))}</b><small>${esc(r.c)}</small></td><td class="t">${fmtT(r.t)}</td><td><button data-d="${i}">✕</button></td></tr>`});
   $('#tb').innerHTML=html;$('#empty').classList.toggle('hidden',n>0);
   $('#empty').textContent=absMode?'Everyone is present. 🎉':'No scans yet. Open Scan to start.';
 }
