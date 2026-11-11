@@ -155,7 +155,17 @@ $('#expBtn').onclick=$('#expTile').onclick=exportCSV;
 async function importPDF(file){
   if(!window.pdfjsLib)return alert('PDF reader is missing from this build.');
   pdfjsLib.GlobalWorkerOptions.workerSrc='pdf.worker.min.js';
-  const found={};let qrs=0,noName=0;
+  const found={};let cards=0,noQR=0;
+  const med=a=>{a=[...a].sort((x,y)=>x-y);return a[a.length>>1]};
+  /* decode one cropped card, retrying at other sizes */
+  const readQR=(src)=>{
+    for(const k of [1,1.5,2,.7,1.25]){
+      const w=Math.round((src.width+100)*k),h=Math.round((src.height+100)*k),t=document.createElement('canvas');t.width=w;t.height=h;
+      const g=t.getContext('2d',{willReadFrequently:true});g.fillStyle='#fff';g.fillRect(0,0,w,h);g.imageSmoothingEnabled=false;
+      g.drawImage(src,50*k,50*k,src.width*k,src.height*k);
+      const d=g.getImageData(0,0,w,h),r=jsQR(d.data,w,h,{inversionAttempts:'attemptBoth'});
+      if(r&&r.data&&r.data.trim())return r.data.trim();
+    }return null};
   try{
     const pdf=await pdfjsLib.getDocument({data:await file.arrayBuffer()}).promise;
     for(let p=1;p<=pdf.numPages;p++){
@@ -164,35 +174,31 @@ async function importPDF(file){
       const c=document.createElement('canvas');c.width=vp.width|0;c.height=vp.height|0;
       const x=c.getContext('2d',{willReadFrequently:true});x.fillStyle='#fff';x.fillRect(0,0,c.width,c.height);
       await page.render({canvasContext:x,viewport:vp}).promise;
-      /* text lines (names printed under each QR) */
-      const items=(await page.getTextContent()).items.filter(i=>i.str.trim()).map(i=>{const t=pdfjsLib.Util.transform(vp.transform,i.transform);return{s:i.str.trim(),x:t[4],y:t[5],w:i.width*vp.scale}});
+      /* 1. text lines: the names printed under each QR */
+      const items=(await page.getTextContent()).items.filter(i=>i.str.trim()).map(i=>{const t=pdfjsLib.Util.transform(vp.transform,i.transform);return{s:i.str.trim(),x:t[4],y:t[5],w:i.width*vp.scale,h:Math.abs(i.height*vp.scale)||12}});
       items.sort((a,b)=>Math.round(a.y/4)-Math.round(b.y/4)||a.x-b.x);
       const lines=[];
       for(const it of items){const l=lines[lines.length-1];
         if(l&&Math.abs(l.y-it.y)<4&&it.x-l.x1<18&&it.x>=l.x0-1){l.s+=' '+it.s;l.x1=it.x+it.w}
-        else lines.push({s:it.s,y:it.y,x0:it.x,x1:it.x+it.w})}
+        else lines.push({s:it.s,y:it.y,x0:it.x,x1:it.x+it.w,h:it.h})}
       lines.forEach(l=>l.cx=(l.x0+l.x1)/2);
-      /* find every QR: decode one, blank it out, repeat */
-      const grab=(ox,oy,w,h,out)=>{
-        for(let k=0;k<40;k++){
-          const d=x.getImageData(ox,oy,w,h),r=jsQR(d.data,w,h,{inversionAttempts:'dontInvert'});if(!r)break;
-          const L=r.location,P=[L.topLeftCorner,L.topRightCorner,L.bottomLeftCorner,L.bottomRightCorner];
-          const x0=Math.min(...P.map(a=>a.x))+ox,x1=Math.max(...P.map(a=>a.x))+ox,y0=Math.min(...P.map(a=>a.y))+oy,y1=Math.max(...P.map(a=>a.y))+oy,m=(x1-x0)*.15;
-          x.fillStyle='#fff';x.fillRect(x0-m,y0-m,x1-x0+2*m,y1-y0+2*m);
-          const cxm=(x0+x1)/2;if(!out.some(o=>Math.abs(o.cx-cxm)<10&&Math.abs(o.top-y0)<10))out.push({id:r.data.trim(),cx:cxm,top:y0,bot:y1,sz:x1-x0});
-        }};
-      const q=[];grab(0,0,c.width,c.height,q);
-      if(!q.length){ /* fallback: overlapping tiles */
-        const tw=c.width/2|0,th=c.height*.35|0;
-        for(let ty=0;ty+th<=c.height+1;ty+=c.height*.2|0)for(let tx=0;tx<=c.width-tw;tx+=c.width*.25|0)grab(tx,ty,tw,Math.min(th,c.height-ty),q);
-      }
-      for(const r of q){
-        qrs++;
-        const below=q.filter(o=>o!==r&&Math.abs(o.cx-r.cx)<r.sz&&o.top>r.bot).map(o=>o.top);
-        const lim=Math.min(r.bot+r.sz*.6,...below);
-        const nl=lines.filter(l=>l.y>r.bot-4&&l.y<lim&&Math.abs(l.cx-r.cx)<r.sz*.6).sort((a,b)=>a.y-b.y).slice(0,3);
-        const name=nl.map(l=>l.s).join(' ').replace(/\s+/g,' ').trim();
-        if(r.id&&name)found[r.id.toUpperCase()]=name;else noName++;
+      /* 2. group lines into columns, then into name blocks (one per card) */
+      const cols=[];
+      for(const l of [...lines].sort((a,b)=>a.cx-b.cx)){const k=cols[cols.length-1];if(k&&Math.abs(l.cx-k[k.length-1].cx)<20)k.push(l);else cols.push([l])}
+      const cxs=cols.map(k=>k.reduce((s,l)=>s+l.cx,0)/k.length),diffs=cxs.slice(1).map((v,i)=>v-cxs[i]);
+      const pitch=diffs.length?med(diffs):c.width*.26,blocks=[];
+      for(const k of cols){k.sort((a,b)=>a.y-b.y);let b=[k[0]];
+        for(const l of k.slice(1)){if(l.y-b[b.length-1].y>c.width*.05){blocks.push(b);b=[l]}else b.push(l)}
+        blocks.push(b)}
+      /* 3. for each name, read the QR in the card area just above it */
+      for(const b of blocks){
+        cards++;
+        const cxm=b.reduce((s,l)=>s+l.cx,0)/b.length,f=b[0];
+        const yb=Math.max(1,Math.round(f.y-f.h*1.1)),yt=Math.max(0,Math.round(yb-pitch*1.05)),x0=Math.max(0,Math.round(cxm-pitch*.46)),x1=Math.min(c.width,Math.round(cxm+pitch*.46));
+        const crop=document.createElement('canvas');crop.width=x1-x0;crop.height=yb-yt;
+        crop.getContext('2d').drawImage(c,x0,yt,x1-x0,yb-yt,0,0,x1-x0,yb-yt);
+        const id=readQR(crop),name=b.map(l=>l.s).join(' ').replace(/\s+/g,' ').trim();
+        if(id&&name)found[id.toUpperCase()]=name;else noQR++;
       }
     }
   }catch(e){$('#toast').classList.add('hidden');return alert('Could not read that PDF.\n'+(e.message||e))}
@@ -200,7 +206,7 @@ async function importPDF(file){
   const n=Object.keys(found).length;
   if(!n)return alert('No QR codes with a name below them were found in this PDF.');
   const had=total();Object.assign(S.roster,found);save();refresh();
-  alert('Imported '+n+' students from '+qrs+' QR codes.'+(noName?'\n'+noName+' QR codes had no name below them and were skipped.':'')+'\nClass list now has '+total()+' students'+(had?' (new entries added to the existing list).':'.'));
+  alert('Imported '+n+' of '+cards+' students found in the PDF.'+(noQR?'\n'+noQR+' names had no readable QR code and were skipped.':'')+'\nClass list now has '+total()+' students.');
 }
 $('#impBtn').onclick=()=>$('#pdfIn').click();
 $('#pdfIn').onchange=e=>{const f=e.target.files[0];e.target.value='';if(f)importPDF(f)};
